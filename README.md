@@ -1,4 +1,6 @@
-# Shawn Schneidereit MSc thesis in Global change Geogrpahy HU-Berlin 
+# Diving into new dimensions: unmixing Sentinel-2 data to assess wetland vegetation dynamics in North-Eastern Germany
+## Shawn Schneidereit 
+### MSc thesis in Global change Geogrpahy HU-Berlin 
 This repo contains the data, code, and graphs assosiated with the associated with my MSc Thesis. Any questions or concerns regarding this repository and work outline can be addressed in the issues tab
 
 ## Table of contents
