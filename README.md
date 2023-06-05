@@ -7,7 +7,6 @@ This repo contains the data, code, and graphs assosiated with the associated wit
 
 - [data](/data) all the data and spreadsheets used in analysis
 - [documents](/documents) relavent documents on matters related to the thesis 
-- [etiquette](/etiquette) this folder cointains the extended guidlines and code of conduct for this repo
 - [figures](/figures) Figures and vizualizations created during data analysis
 - [other](/other) this folder cointains various miscilanous information and resources accumilated during the duration of the course 
 
