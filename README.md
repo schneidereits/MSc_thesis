@@ -5,7 +5,7 @@ This repo contains the data, code, and graphs assosiated with the associated wit
 
 ## Table of contents
 
-- [code](/code) all the data and spreadsheets used in analysis
+- [code](/code) all the code and FORCE parameter files used in my analysis
 - [figures](/figures) Figures and vizualizations created during data analysis
 - [other](/other) this folder cointains various miscilanous information and resources accumilated during the duration of the course 
 
