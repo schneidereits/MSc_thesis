@@ -1,0 +1,29 @@
+dforce force-magic-parameters "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/prm_files/04_training.prm" -o "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/prm_files/04_training_prm_files/"
+
+for f in /data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/prm_files/04_training_prm_files/*.prm; do dforce force-train $f; done
+
+##############
+
+dforce force-magic-parameters "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/prm_files/05_ml_predict.prm" -o "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/prm_files/05_ml_predict_prm/"
+
+for f in /data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/prm_files/05_ml_predict_prm/*.prm; do dforce force-higher-level $f; done
+
+
+#############
+
+dforce force-mosaic "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/05_predictions/"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
