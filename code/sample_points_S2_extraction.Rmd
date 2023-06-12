@@ -1,0 +1,2226 @@
+---
+title: "sample_points_S2_extraction"
+author: "Shawn Schneidereit"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+   fig_width: 6
+   fig_height: 3
+   toc: TRUE
+   toc_float: TRUE
+   toc_collapsed: FALSE
+   code_folding: hide
+   theme: united
+   highlight: tango
+---
+
+```{r, cache=FALSE, setup, include=FALSE}
+# library
+library(terra)     # raster data maipulations
+library(sf)
+library(viridis)   # color palletes
+library(tidyverse) # data manipulation
+library(patchwork) # for grid visualization
+library(ggridges)  # ridge plots
+library(ggpmisc)
+library(knitr)
+library(kableExtra)
+library(tidyterra)
+library(patchwork)
+library(ggExtra)
+
+#knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, cache=FALSE, include=FALSE, eval=FALSE}
+sample_points_wide <- readRDS( file = "/data/Dagobah/greengrass/schnesha/thesis/feature_space/sample_points_df_regular_wide_reduced.rds") 
+```
+
+
+```{r, cache=TRUE, include=FALSE}
+# path and working directory managment
+knitr::opts_knit$set(root.dir = '/data/Dagobah/greengrass/schnesha/thesis')
+setwd("/data/Dagobah/greengrass/schnesha/thesis")
+
+unix::rlimit_as(1e12, 1e12)
+
+```
+
+
+
+# Wetland Data import and manipulation
+
+Three independant shp files for moors/wetlands were provided, so here the converted to common crs and combined into a single layer
+
+## Wiedervernaessung_MV
+```{r Wiedervernaessung_MV, cache=TRUE, include=TRUE}
+link <- "/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/DE_wiedervernaesst/Wiedervernaessung_MV_final.shp"
+
+not_all_na <- function(x) any(!is.na(x)) # little helper function to select only cols that contain data 
+
+MV <- read_sf(link) |> select(where(not_all_na)) |> select(geometry) |> mutate(rewetted = TRUE)
+
+
+```
+
+## Wiedervernaessung_BB
+```{r Wiedervernaessung_BB, cache=TRUE, include=TRUE}
+link <- "/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/DE_wiedervernaesst/Wiedervernaessung_BB_final.shp"
+
+BB <- read_sf(link) |> select(where(not_all_na)) |> select(geometry) |> mutate(rewetted = TRUE)
+```
+
+## moor_kbk25
+```{r moor_kbk25, cache=TRUE, include=TRUE}
+link <- "/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/moork/moor_kbk25.shp"
+
+moor <- read_sf(link) |> select(geometry) |> mutate(rewetted = FALSE)
+```
+
+## gloez2_moor Brandenburg
+```{r gloez2_moor, cache=TRUE, include=TRUE}
+link <- "/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/gloez2_moor/gloez2_moo_fk.shp"
+
+BB_moor <- read_sf(link) |> select(geometry) |> st_transform(st_crs(MV)) |> mutate(rewetted = FALSE)
+```
+
+### check matching crs
+```{r, cache=TRUE, include=FALSE}
+st_crs(MV)
+st_crs(MV) == st_crs(BB)
+st_crs(MV) == st_crs(moor)
+st_crs(MV) == st_crs(BB_moor)
+
+```
+
+### Bind shapes into single layer
+```{r, cache=TRUE, include=TRUE}
+wetlands <-  rbind(MV, BB) |> 
+   rbind(moor) |> 
+   rbind(BB_moor)
+
+plot(vect(wetlands))
+```
+
+
+### Write combined wetland shp file to disk
+```{r Write_combined_wetland_shp_file_to_disk, cache=TRUE, include=TRUE}
+# write shp to disk
+
+library(rgdal) 
+library(rgeos) 
+
+st_write(wetlands, "/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/wetland_mask_vector/wetland_mask.shp", delete_layer = TRUE)
+
+```
+
+Using the force-cube module the wetland vect mask is converted into cubed tif
+
+### re-import cubed tif of wetland mask
+```{r, cache=TRUE, eval=FALSE}
+wetland_mask <- rast("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/mosaic/wetland_mask.vrt") #|> 
+  # reproject to match format of landcover (if not done there are artificates in the mask from imprecise reprojection)
+  #project(rast("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/DE_cover/classification_map_germany_2020_v02.tif"))
+plot(wetland_mask)
+```
+
+
+## Import classification_map_germany_2020
+
+(source: https://www.mundialis.de/en/deutschland-2020-landbedeckung-auf-basis-von-sentinel-2-daten/)
+
+### Download classification_map_germany_2020_v02.tif
+```{r, cache=FALSE, include=TRUE, eval=FALSE}
+download.file('https://data.mundialis.de/geodata/lulc-germany/classification_2020/classification_map_germany_2020_v02.tif', 
+              destfile = "/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/DE_cover/classification_map_germany_2020_v02.tif")
+```
+
+## change forest and crops to NA for masking
+```{r, cache=FALSE, include=TRUE, eval=FALSE}
+
+forest_mask <- rast("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/DE_cover/classification_map_germany_2020_v02.tif")
+
+#wetland_mask_repojected <- NULL
+
+# Cover classes in classification map
+#10: forest
+#20: low vegetation
+#30: water
+#40: built-up
+#50: bare soil
+#60: agriculture
+
+forest_mask[forest_mask < 11] <- 1
+forest_mask[forest_mask > 1] <- NA
+
+
+forest_mask <- forest_mask |> project(wetland_mask)
+plot(forest_mask, col=c("black"))
+
+#forest_mask_buffered <- buffer(forest_mask, width=20,  background=NA) 
+#forest_mask_buffered[isTRUE(forest_mask_buffered)] <- 1
+#forest_mask_buffered[isFALSE(forest_mask_buffered)] <- NA
+#forest_mask_buffered[!is.na(forest_mask_buffered)] <- 1
+
+#plot(forest_mask_buffered, col=c("black"))
+
+terra::writeRaster(
+   forest_mask,
+   filename = paste0("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/DE_cover/classification_map_germany_2020_v02_forest_mask.tif"),
+   filetype = 'GTiff',
+   datatype = 'INT2S',
+   overwrite = TRUE
+)
+
+terra::writeRaster(
+   forest_mask,
+   filename = paste0("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/DE_cover/classification_map_germany_2020_v02_forest_mask_50m_buffer.tif"),
+   filetype = 'GTiff',
+   datatype = 'INT2S',
+   overwrite = TRUE
+)
+
+
+```
+
+
+```{r, cache=FALSE, include=TRUE, eval=FALSE}
+wetland_mask_v2 <- terra::mask(wetland_mask, forest_mask, maskvalue=1, updatevalue=NA)
+
+# filter out non 1
+#wetland_mask_v2[wetland_mask_v2 < 1] <- NA
+
+plot(wetland_mask_v2, col=c("black","blue"))
+
+
+terra::writeRaster(
+   wetland_mask_v2,
+   filename = paste0("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/wetland_mask_v2.tif"),
+   filetype = 'GTiff',
+   datatype = 'INT2S',
+   overwrite = TRUE
+)
+
+```
+
+
+### re-import cubed tif of wetland mask
+```{r, cache=TRUE, eval=FALSE}
+wetland_mask <- rast("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/wetland_mask_v2.tif") #|> 
+  # reproject to match format of landcover (if not done there are artificates in the mask from imprecise reprojection)
+ # project(rast("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/Crop_GER_2019/CTM_GER_2019.tif"))
+plot(wetland_mask)
+```
+
+## Apply Thünen institue cropland mask
+```{r, cache=FALSE, include=TRUE, eval=FALSE}
+
+crop_map <- rast("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/Crop_GER_2019/CTM_GER_2019.tif") #%>crop(wetland_mask)
+
+#wetland_mask_repojected <- NULL
+
+# Cover classes in classification map
+# 10     Grassland
+# 31     Winter wheat
+# 32     Winter rye
+# 33     Winter barley
+# 34     Other winter cereal
+# 41     Spring barley
+# 42     Spring oat
+# 43     Other spring cereal
+# 50     Winter rapeseed
+# 60     Legume
+# 70     Sunflower
+# 80     Sugar beet
+# 91     Maize
+# 92     Maize (grain)
+# 100    Potato
+# 110    Grapevine
+# 120    Strawberry
+# 130    Asparagus
+# 140    Onion
+# 150    Hops
+# 160    Orchard
+# 181    Carrot
+# 182    Other vegetables
+# 555    Small woody features
+# 999    Other agricultural areas
+
+crop_map[crop_map %in% c(31, 32, 33, 34, 41, 42, 43, 50, 60, 70, 80, 91, 92, 100, 110, 120, 130, 140, 150, 160, 181, 182)] <- 1
+crop_map[crop_map %in% c(10, 555, 999)] <- 2
+
+
+crop_map <- crop_map |> project(wetland_mask)
+
+plot(crop_map, col=c("green", "blue"))
+
+
+terra::writeRaster(
+   crop_map,
+   filename = paste0("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/Crop_GER_2019/CTM_GER_2019_v2.tif"),
+   filetype = 'GTiff',
+   datatype = 'INT2S',
+   overwrite = TRUE
+)
+
+```
+
+# add crop mask to wetland mask
+```{r, cache=FALSE, include=TRUE, eval=FALSE}
+wetland_mask_v2 <- terra::mask(wetland_mask_v2, crop_map, maskvalue=1, updatevalue=NA)
+
+wetland_mask_v2[!wetland_mask_v2 == 1] <- 0
+
+plot(wetland_mask_v2)
+
+terra::writeRaster(
+   wetland_mask_v2,
+   filename = paste0("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/wetland_mask_v2.tif"),
+   filetype = 'GTiff',
+   datatype = 'INT2S',
+   overwrite = TRUE
+)
+```
+
+
+## Apply Grassland mask
+```{r, cache=FALSE, include=TRUE, eval=FALSE}
+
+grassland_map <- rast("/data/Dagobah/greengrass/grassland_ger_ls_s2/GL_change_mask/GL_mask.tif") 
+
+plot(grassland_map)
+
+grassland_map <- grassland_map |> project(wetland_mask)
+
+wetland_mask_v2 <- terra::mask(wetland_mask_v2, grassland_map, maskvalue=1, updatevalue=NA)
+
+wetland_mask_v2[!wetland_mask_v2 == 1] <-0
+
+plot(wetland_mask_v2, col=c("black"))
+
+
+terra::writeRaster(
+   wetland_mask_v2,
+   # saved as version 3 as original workflow did not mask grasslands
+   filename = paste0("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/wetland_mask_v3.tif"),
+   filetype = 'GTiff',
+   datatype = 'INT2S',
+   overwrite = TRUE
+)
+
+```
+
+
+
+# Sample Point generation
+
+## Read sample points
+
+### Random sampling 
+
+100 random points per feature, with a minimum of 50 m between points and 20 meters buffer to edge of exent. After 5 unsuccessful attempts of sampling a point meeting the criteria the sampling algorithm moved on to the next feature.
+```{r, cache=TRUE, eval=FALSE}
+random <- read_sf("/data/Dagobah/greengrass/schnesha/thesis/feature_space/sample_points_random/sample_points_random.shp") |> 
+  vect() 
+plot(random)
+
+print(paste("the random sampling strategy yielded", nrow(random), "sample points."))
+```
+
+### Regular sampling
+```{r, cache=TRUE, eval=FALSE}
+regular <- read_sf("/data/Dagobah/greengrass/schnesha/thesis/feature_space/sample_points_regular/sample_points_regular.shp") |> 
+  vect() 
+plot(regular)
+
+print(paste("the regular sampling strategy yielded", nrow(regular), "sample points."))
+```
+
+# Regular sampling in R version
+```{r, cache=TRUE, eval=FALSE}
+# import updatede wetland mask
+wetland_mask <- rast("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/wetland_mask_v2.tif") #|>  crop(ext(4546026, 4676026, 3334920, 3524920))
+
+# There are no methods for negative buffering of rasters in R. This is a workaround that inverts the wetland mask and using an ifelse inverts na values and buffers into the valid raster pixels
+wetland_mask <- !buffer(ifel(is.na(wetland_mask), 1, NA), 
+              width=50) 
+
+# Replace false values with NA so that they can me omitted in the sampling process
+wetland_mask <- subst(wetland_mask, FALSE, NA)
+
+# Sample points on a 200x200 m regular grid
+samples <- spatSample(wetland_mask,
+                      size   = size(wetland_mask)/200, # get total size and divide to reduce to 200x200m
+                      method = "regular",
+                      as.points =T,
+                      exhaustive=T, na.rm=TRUE) 
+
+plot(samples)
+
+
+```
+
+### Import DC grid Tiles
+```{r, cache=TRUE, eval=FALSE}
+grid <- read_sf("/data/Dagobah/dc/deu/vector/datacube-grid_DEU_10km.gpkg") |> 
+   st_transform(crs = st_crs(samples)) |> 
+  vect()
+
+plot(grid)
+```
+
+```{r, cache=TRUE, eval=FALSE}
+regular <- terra::intersect(grid, samples) |> 
+   select(-Tile_X, -Tile_Y, -wetland_mask) |> 
+  mutate(ID = row_number())
+
+
+
+plot(regular)
+```
+
+## Merge sample points with rewetting data and DC grid
+
+```{r, cache=TRUE, eval=FALSE}
+# Extract rewetting information 
+#library(sp)
+#library(rgeos)
+#wetland_buffered <- gBuffer(wetlands, byid=TRUE, width=0)
+
+#samples <- terra::intersect(project(vect(wetlands), samples), 
+#                      samples) 
+```
+
+## Convert to DF
+```{r, cache=TRUE, eval=FALSE}
+# Convert to a data frame and rename cols
+# regular <- as.data.frame(samples) |> 
+#   select(-wetland_mask) |> 
+#   mutate(ID = row_number())
+
+
+```
+
+### number of samples per tile
+```{r, cache=TRUE, eval=FALSE}
+# as.data.frame(regular) %>%
+#   
+#   ggplot(aes(x=Tile_ID)) +
+#   geom_bar() +
+#   theme_minimal() 
+```
+
+
+## Extract Information per tile 
+```{r, cache=F, eval=F}
+# create list of all tile folders 
+tile_folders <- list.dirs("/data/Dagobah/greengrass/schnesha/thesis/feature_space/TS_S2_17-22", full.names = T) 
+tile_folders <-  tile_folders[grepl("X", tile_folders)]
+
+sample_points_df <- c()
+
+for (i in 1:length(tile_folders)) {
+   
+   # list bands in tile (with full path) and stack
+   band_files <- list.files(tile_folders[i], full.names = T)
+   band_files <- band_files[!grepl("aux.xml", band_files)]
+   # select files with correct doy 
+   band_files <- band_files[grepl("091-320", band_files)]
+   
+   # read in all band for the tile as a raster stack
+   S2_stack <- rast(band_files)
+   
+   # get the number of layers (per band)
+   nlayers = nlyr(S2_stack)/12
+   # add unique name to each band 
+   names(S2_stack) <-  paste0(names(S2_stack), "_", c(rep("BLU",nlayers) , rep("GRN",nlayers), rep("NDT",nlayers), rep("NDV",nlayers), rep("NIR",nlayers), rep("RE1",nlayers), rep("RE2",nlayers), rep("RE3",nlayers), rep("RED",nlayers), rep("SW1",nlayers), rep("SW2",nlayers), rep("TCW",nlayers)))
+  
+   # current tile
+   current_tile <- band_files[1] |> str_sub(68,78)
+   
+   # subset sample points to current tile
+  filtered_samples <- regular |> 
+     filter(Tile_ID == current_tile) |> 
+    # Reproject to match crs of DC
+     project(S2_stack) 
+    
+   
+  # extract S2 for sample points and convert to df
+  sample_points <- terra::extract(S2_stack, filtered_samples, xy=T, bind=T, ID=T) |> 
+     as.data.frame()
+  # bind to total df
+  sample_points_df <- plyr::rbind.fill(sample_points_df, as.data.frame(sample_points))
+  
+  # Progress notifier
+  print(paste("tile", current_tile, "done", "(", i, "out of ", length(tile_folders), ")"))
+  
+}
+```
+
+### cache output of S2 extraction for sample points 
+```{r, cache=F, eval=TRUE}
+
+#saveRDS(sample_points_df, "/data/Dagobah/greengrass/schnesha/thesis/feature_space/sample_points_df_regular.rds")
+#sample_points_df <- readRDS( file = "/data/Dagobah/greengrass/schnesha/thesis/feature_space/sample_points_df_regular.rds")
+```
+
+## create long df
+```{r, cache=TRUE, eval=FALSE}
+sample_points_long <- sample_points_df |> 
+   # ensure the correct order of variables before pivot longer
+   select(Tile_ID, x, y, everything()) |> 
+   pivot_longer(cols = c(5:(ncol(sample_points_df))), names_to= "source", values_to = "reflectance") |> 
+   na.omit() |> 
+#   slice_sample(n = 10000) |> 
+   mutate(date        = as.Date(str_sub(source, 1, 9),format = "%Y%m%d"),
+         month       = lubridate::month(date),
+         year        = lubridate::year(date), 
+         month_year  = paste0(month,"_",year),
+         doy         = lubridate::yday(date),
+         sensor      = str_sub(source, 10, 14),
+         band        = str_sub(source, 16, 19),
+         band        = str_replace(band, "NDV", "NDVI"),
+         band        = str_replace(band, "NDT", "NDTI"),
+         reflectance = case_when(band == 'NDTI' | band == 'NDVI' ~ reflectance/10000,
+                                 band != 'NDTI' | band != 'NDVI' ~ reflectance/100)) |> 
+  # filter(reflectance>0,
+  #       reflectance<100) |> 
+  na.omit()
+
+```
+
+## Pivot Wider
+```{r, cache=TRUE, echo=TRUE, eval=FALSE}
+sample_points_wide <- sample_points_long %>%  
+  # need to remove source so that so that bands can be aggregated into a single row (all other cols have to match)
+  select(-source) |>  
+   distinct(x, y, date, band, .keep_all=T) 
+
+
+   # create unique ID for each each point at each time (so that multiple bands for the same location&day have the same ID)
+ sample_points_wide <- sample_points_wide %>%  
+   mutate(UID = group_indices(sample_points_wide, .dots=c("x", "y", "date"))) |> 
+  tidyr::spread(band,  reflectance) |> 
+  select(ID, Tile_ID, date, month, year, month_year, doy, sensor, BLU, GRN, NIR, RE1, RE2, RE3, RED, SW1, SW2, NDTI, NDVI, TCW,  everything()) |> 
+  filter(across(BLU:SW2, ~ . > 0),
+         across(BLU:SW2, ~ . < 100),
+         NDTI > 0,
+         NDTI < 1,
+         NDVI > -1,
+         NDVI < 1) |> 
+  mutate(SWIR_ratio = (SW2/SW1),
+         NDWI       = (GRN-NIR)/(GRN+NIR),
+         MNDWI      = (GRN-SW1)/(GRN+SW1)) |> 
+  filter(SWIR_ratio<10) |> 
+   filter_all(all_vars(!is.infinite(.))) |> 
+ # mutate_if(is.numeric, list(~na_if(., Inf))) %>% 
+ # mutate_if(is.numeric, list(~na_if(., -Inf))) |> 
+  na.omit()
+```
+
+
+## cache output of S2 extraction for sample points 
+```{r Load_sample_points, cache=F, eval=TRUE}
+# Full data set
+#saveRDS(sample_points_wide, "/data/Dagobah/greengrass/schnesha/thesis/feature_space/sample_points_df_regular_wide.rds")
+#sample_points_wide <- readRDS( file = "/data/Dagobah/greengrass/schnesha/thesis/feature_space/sample_points_df_regular_wide.rds") %>% slice_sample(n=10000000)
+
+
+# reduced data set
+#saveRDS(slice_sample(n = 10000000,  sample_points_wide), "/data/Dagobah/greengrass/schnesha/thesis/feature_space/sample_points_df_regular_wide_reduced.rds")
+sample_points_wide <- readRDS( file = "/data/Dagobah/greengrass/schnesha/thesis/feature_space/sample_points_df_regular_wide_reduced.rds") %>% slice_sample(n=1000000)
+```
+
+## Create brightness normalized version of data
+```{r, cache=T, eval=FALSE}
+sample_points_wide <- sample_points_wide |> 
+  rowwise() |> 
+  mutate(mean_reflectance = mean(c(BLU:SW2))) |> 
+  mutate(across(BLU:SW2, ~ ((.x)/mean_reflectance)),
+         NDVI       = (NIR-RED)/(NIR+RED),
+         SWIR_ratio = (SW2/SW1),
+         NDWI       = (GRN-NIR)/(GRN+NIR),
+         MNDWI      = (GRN-SW1)/(GRN+SW1)) |> 
+  select(-mean_reflectance)
+
+```
+
+## Save as vector
+```{r, cache=F, eval=FALSE}
+xy <- sample_points_wide |> select(x,y) 
+library(sp)
+
+
+sample_points_wide_vect <- SpatialPointsDataFrame(coords = xy, data = sample_points_wide,
+                               proj4string = CRS("+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs")) |> 
+  vect() 
+  #project( "epsg:3857")
+#project( "epsg:4326")
+  
+writeVector(sample_points_wide_vect, "/data/Dagobah/greengrass/schnesha/thesis/feature_space/sample_points_wide_vect.gpkg", overwrite=TRUE)
+
+
+
+```
+
+
+# Exploratory visualizations
+
+## CSO 
+
+```{r CSO, eval=F, cache=TRUE}
+CSO <- rast("/data/Dagobah/greengrass/schnesha/thesis/02_CSO/mosaic/2017-2022_091-320-12_HL_CSO_SEN2L_NUM.vrt")
+CSO_AVG <- rast("/data/Dagobah/greengrass/schnesha/thesis/02_CSO/mosaic/2017-2022_091-320-12_HL_CSO_SEN2L_AVG.vrt")
+
+# Average observation per year
+global(CSO, c("mean"), na.rm=TRUE)
+# average days between observations
+global(CSO_AVG, c("mean"), na.rm=TRUE)
+
+# Map of number of observations per year
+plot(CSO,
+     legend=T, col = viridis(n=100,option="D"), range=c(0,40)
+     )
+
+# Map of average number of days between observations 
+plot(CSO_AVG,
+     legend=T, col = viridis(n=100,option="D"),
+     range=c(0,30)
+     )
+
+
+
+# Aggregating days between observations
+CSO_AVG_aggregated <- mean(CSO_AVG)
+
+# map of average number of days between observation 
+plot(CSO_AVG_aggregated,
+     legend=T, col = viridis(n=100,option="D"),
+     range=c(0,30)
+     )
+
+writeRaster(CSO_AVG_aggregated, 
+            "/data/Dagobah/greengrass/schnesha/thesis/02_CSO/CSO_AVG_aggregated.gpkg",
+            filetype="GPKG",
+            options = NULL,
+            overwrite=TRUE)
+
+terra::writeRaster(
+   CSO_AVG_aggregated,
+   filename = "/data/Dagobah/greengrass/schnesha/thesis/02_CSO/CSO_AVG_aggregated.gpkg",
+   filetype = 'GTiff',
+   datatype = 'INT2S',
+   overwrite = TRUE
+)
+
+# Average number of days between observations 
+global(CSO_AVG_aggregated, c("mean"), na.rm=TRUE)
+```
+
+## drought index
+```{r Drought_index, eval=F, cache=FALSE}
+drought_index <- rast("/data/Dagobah/greengrass/schnesha/thesis/DWD/drought_index_stack.tif")
+
+month_year <- paste0(c(1:12), "_", rep(c(2017:2022),each=12))
+names(drought_index) <- month_year
+
+plot(drought_index)
+
+growing_season_drought <- drought_index |> 
+  select(paste0(c(3:11),"_",rep(c(2017:2022),each=9))) 
+
+
+
+drought_index_df <- as.data.frame(drought_index) |> 
+  pivot_longer(everything(), names_to = "month_year") |> 
+  filter(month_year %in% c(paste0(c(4:10), "_", rep(c(2017:2022),each=12)))) |> 
+  slice_sample(n=20000) |> 
+  separate(month_year, into = c("month", "year"), sep = "_") %>%
+  mutate(date = paste(year, month, "01", sep = "-"),
+         date = lubridate::ymd(date)) 
+
+ggplot(drought_index_df, aes(date, value, color=year)) +
+  stat_smooth(method = "loess") +
+  #stat_summary(fun=mean, geom="line", size = 1.5) + # draw a mean line in the data
+  #geom_line(FC_df, mapping= aes(date, value/100, group = Tile_ID), alpha=0.8) +
+  scale_colour_viridis_d(option = "D") +
+  theme_minimal() +
+  ylab("Drought Index") +
+  facet_wrap(~year, scales="free_x")
+```
+
+## precipitation
+```{r, eval=F, cache=FALSE}
+precipitation <- rast("/data/Dagobah/greengrass/schnesha/thesis/DWD/precipitation_stack.tif")
+
+names(precipitation) <- month_year
+
+plot(precipitation)
+
+precipitation_df <- as.data.frame(precipitation) |> 
+  pivot_longer(everything(), names_to = "month_year") |> 
+  filter(month_year %in% c(paste0(c(4:10), "_", rep(c(2017:2022),each=12)))) |> 
+  slice_sample(n=20000) |> 
+  separate(month_year, into = c("month", "year"), sep = "_") %>%
+  mutate(date = paste(year, month, "01", sep = "-"),
+         date = lubridate::ymd(date)) 
+
+
+ggplot(precipitation_df, aes(date, value, color=year)) +
+  geom_line(stat="smooth", method = "loess",  size=2, alpha=0.9) +
+  #stat_smooth(method = "loess" ) +
+  #stat_summary(fun=mean, geom="line", size = 1.5) + # draw a mean line in the data
+  #geom_line(FC_df, mapping= aes(date, value/100, group = Tile_ID), alpha=0.8) +
+  scale_colour_viridis_d(option = "D") +
+  # scale_colour_gradient2(low = "darkblue", mid = "yellow" , high = "red", 
+  #                        midpoint=median(precipitation_df$value)) +
+  theme_minimal() +
+  ylab("precipitation") +
+  facet_wrap(~year, scales="free_x")
+```
+
+### combo plot
+```{r, eval=F, cache=FALSE}
+
+ggplot(precipitation_df, aes(date, value)) +
+  stat_smooth(drought_index_df, mapping=aes(date, value*10, colour=..y..), method = "loess", size=2) +
+  stat_smooth(method = "loess" , color="black") +
+  # stat_summary(aes(color=value),fun=mean, geom="line", size = 1.5) + # draw a mean line in the data
+  #geom_line(FC_df, mapping= aes(date, value/100, group = Tile_ID), alpha=0.8) +
+  scale_colour_viridis_c(option = "D", direction = -1) +
+  theme_minimal() +
+  theme(legend.position="none") + 
+  scale_y_continuous(
+    
+    # Features of the first axis
+    name = "Precipitation",
+    
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~./10, name="drought index")
+  ) +
+  facet_wrap(~year, scales="free_x")
+
+
+```
+
+observation dates
+```{r, cache=TRUE}
+
+sample_points_wide |> 
+  group_by(date) |> 
+  tally() %>%
+  
+  ggplot(aes(date, n)) +
+  geom_point(aes(size=n)) +
+  theme_classic()
+
+sample_points_wide |> 
+  group_by(date, year) |> 
+  tally() |> 
+  ungroup() %>%
+
+ggplot(aes(as.factor(year), n, fill=year)) +
+  geom_violin() +
+  scale_fill_viridis_c(option = "D") +
+  theme_classic()
+
+```
+
+
+## observation density
+
+```{r observation_density, cache=TRUE, echo=TRUE}
+observations <- sample_points_wide |> 
+  group_by(month_year, month, year) |> 
+  summarise(count = n()) |> 
+  mutate(month_year = as.factor(month_year),
+        # month = as.factor(month),
+         year = as.factor(year))
+```
+
+
+## Bar chart 
+```{r Observation_density_bar_chart, cache=TRUE, echo=TRUE}
+ggplot(observations, aes(year, count, color = year, fill=month)) +
+  geom_bar(stat='identity', color="black") +
+  #scale_colour_viridis_d(option = "D") +
+  scale_fill_viridis_c(option = "D") +
+  theme_minimal()
+```
+
+### Bar chart  by region
+```{r Bar_chart_by_region, cache=TRUE, echo=TRUE}
+
+sample_points_wide %>%
+  group_by(month_year, month, year, Tile_ID) %>%
+  summarise(count = n()) %>%
+  mutate(month_year = as.factor(month_year),
+         year = as.factor(year)) %>%
+
+ggplot(aes(year, count, color = year, fill=month)) +
+  geom_bar(stat='identity', color="black") +
+  #scale_colour_viridis_d(option = "D") +
+  scale_fill_viridis_c(option = "D") +
+  theme_minimal() +
+  facet_wrap(~Tile_ID)
+
+```
+
+
+## NDVI time series
+```{r  NDVI_time_series, eval=T, cache=TRUE}
+ggplot(sample_points_wide, aes(doy, NDVI, color=year, group=year)) +
+  geom_smooth() +
+  scale_colour_viridis_c(option = "D") +
+  theme_minimal()
+```
+
+### NDTI time series
+```{r, eval=F, cache=TRUE}
+ggplot(sample_points_wide, aes(doy, NDTI, color=year, group=year)) +
+  geom_smooth() +
+  scale_colour_viridis_c(option = "D") +
+  theme_minimal()
+```
+
+### MNDWI time series
+```{r, eval=F, cache=TRUE}
+ggplot(na.omit(sample_points_wide), aes(doy, MNDWI, color=year, group=year)) +
+  geom_smooth() +
+  scale_colour_viridis_c(option = "D") +
+  theme_minimal()
+```
+
+
+MNDWI time series for 2017 looks suspiciously flat. But after double checking it looks like values are there and are artifact free and that the mean seems relatively stable across the time serious. There are some variations across the smoothed trend line, but these may just be not visible in the plot abouve with larger axis scales. 
+
+```{r MNDWI_time_series, eval=F, cache=TRUE}
+ggplot(sample_points_wide, aes(doy, MNDWI, color=year, group=year)) +
+#  geom_smooth() +
+  geom_point() + 
+  scale_colour_viridis_c(option = "D") +
+  theme_minimal() +
+  facet_wrap(~year)
+
+sample_points_wide |> 
+  filter(year==2017) |> 
+  group_by(doy) |> 
+  summarise(mean = mean(MNDWI)) |> 
+  
+  ggplot(aes(x=doy, y=mean)) +
+  geom_line() +
+ # geom_smooth() + 
+  theme_minimal()
+
+```
+
+
+# Spectal Feature Spaces
+
+## plot complete data
+
+```{r Feature_Space, cache=TRUE}
+# No dissagregation
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio)) +
+  stat_bin_hex(bins = 200) + #geom_point(data=reference_spectra, aes(NDVI, SWIR_ratio), color ="red") +
+  scale_fill_continuous(type = "viridis") +
+    scale_fill_continuous(type = "viridis", limits=c(2,20000), na.value = "white") +
+  theme_minimal() 
+```
+
+
+## facet by sensor
+```{r facet_by_sensor, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio)) +
+  stat_bin_hex(bins = 200) +
+  scale_fill_continuous(type = "viridis") +
+  theme_minimal() +
+  facet_wrap(~sensor)
+```
+
+
+## facet by month
+```{r, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio)) +
+  stat_bin_hex(bins = 100) +
+  scale_fill_continuous(type = "viridis") +
+  theme_minimal() +
+  facet_wrap(~month)
+```
+
+
+## facet by year
+
+```{r, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio)) +
+  stat_bin_hex(bins = 100) +
+  scale_fill_continuous(type = "viridis") +
+  theme_minimal() +
+  facet_wrap(~year)
+```
+
+## facet by month and year
+
+```{r, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio)) +
+  stat_bin_hex(bins = 100) +
+  scale_fill_continuous(type = "viridis") +
+  theme_minimal() +
+  facet_grid(rows= vars(year), cols = vars(month))
+```
+
+## facet by Tile_ID
+
+```{r, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio)) +
+  stat_bin_hex(bins = 100) +
+  scale_fill_continuous(type = "viridis") +
+  theme_minimal() +
+  scale_x_continuous(expand = c(0, 0), limits = c(-0.2, 1)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.2)) +
+  facet_wrap(~Tile_ID)
+```
+
+## feature space *Side View* (colored by MNDWI)
+```{r, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio, color=MNDWI)) +
+   geom_point() +
+  scale_color_continuous(type = "viridis") +
+  theme_minimal() 
+```
+
+## feature space across months and years (colored by MNDWI)
+```{r, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio, color=MNDWI)) +
+   geom_point() +
+  scale_color_continuous(type = "viridis") +
+  theme_minimal() +
+  facet_grid(rows= vars(year), cols = vars(month))
+```
+
+## MNDWI feature space  *Top View* 
+
+```{r, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, MNDWI, color=SWIR_ratio)) +
+  geom_point() +
+  scale_color_continuous(type = "viridis") +
+  theme_minimal()
+```
+
+## MNDWI+ SWIR feature space  *End View* 
+
+```{r, cache=TRUE}
+ggplot(sample_points_wide, aes(MNDWI, SWIR_ratio, color=NDVI)) +
+  geom_point() +
+  scale_color_continuous(type = "viridis") +
+  theme_minimal()
+
+
+
+```
+
+
+### 2-d feature space 
+
+```{r, eval=FALSE, cache=FALSE}
+library(plotly)
+
+sample_points_wide %>%
+
+plot_ly(x=~NDVI, y=~SWIR_ratio, type="scatter", mode="markers", color=~MNDWI, text = ~sample_points_wide$ID) 
+
+
+```
+
+
+### 3-d feature space with water component
+
+```{r, eval=FALSE, cache=FALSE}
+library(plotly)
+
+sample_points_wide %>%
+
+plot_ly(x=~NDVI, y=~MNDWI, z=~SWIR_ratio, type="scatter3d", mode="markers", color=~NDVI) |> 
+  add_trace(data =endmembers, x=~NDVI, y=~MNDWI, z=~SWIR_ratio, name = 'endmembers', mode = 'markers', color="red")
+
+
+```
+
+
+
+# Investigation into the distribution of water points in the scatter plot
+
+**Overall I was not able to find reliable consistent trends between points in different regions of the feature space.**
+Below are some observations, but they are not super consistent or reliable. 
+
+1) Low SWIR & high NDVI. Likely a mixed pixel on the water edge or with floating/standing PV
+    i) Seasonally flooded fields in some cases (id c(1713559, 1717620, 1725745)
+2) low swir & low NDVI ratio points -> pure water or in one chase shade
+3) higher SWIR often in floodplain areas (large number @penne estuary) or closer to water edge (and some indication to be more common in march)
+    i) -> so maybe some seasonal exposed or near surface influence of sediment c(613913, 613916, 6220443)
+    ii) But also some deeper water points (not researched, but could also be due to high turbidity (strom/wind) causing sediment to be suspended in water column)
+4) low swir high NDVI tend to be shallow water bodies with a chance of surface veg, seasonal variation in water cover,  Or potentially mixed pixels with forest. (and some indication to be more common in growing season)
+
+**Other Visual observation in QGIS** 
+
+1) soil seems to come exclusively from tilled fields (of which there are many in the mask…?)
+2) High PV only from forest or agricultural fields. Would need to adjust prefiltering/ manually include the highest PV water edge plots
+    i) “Real” wetland PV has consistently lower NDVI and a higher SWIR ratio
+    ii) Potentially due to “ the reflectance spectra of wetland vegetation canopies are often very similar and are combined with reflectance spectra of the underlying soil, hydrologic regime, and atmospheric vapour (Guyot 1990; Malthus and George 1997; Lin and Liquan 2006) (Fig. 1). This combination usually complicate the optical classification and results in a decrease in the spectral reflectance, especially in the near-to mid-infrared regions where water absorption is stronger (Fyfe 2003; Silva et al. 2008)”(Adam, et, al 2009).
+3) Edge in feature space at 0.6-0.7 NDVI and SWIR comes from non-greenpeak croplands and some wetland PV
+4) small cluster of points (NDVI> 0.3 & NDVI< 0.575 & SWIR_ratio<0.5 & MNDWI < -0.75) are crop lands with NPV. Some spatial clustering present 
+4) Mask is not ideal. At least one solar park found... (id 1040322)
+
+# Logic based endmember selection
+
+Here I used a simple rules based filtering approach to isolate potential endmembers, and scope how endmemebers points distribute in the feature space
+
+## looser rules
+
+First I used a looser set of rules to inlcude more endmembers. These were visually assesed in QGIS to determine if any visual trends could be identified.
+
+```{r Loose_endmeber_rules, cache=TRUE}
+PV <- sample_points_wide |> 
+  filter(NDVI> 0.94 & SWIR_ratio<0.4 & MNDWI < -0.5) |> 
+  mutate(class = "PV")
+
+NPV <- sample_points_wide |> 
+  filter(NDVI< 0.32 & SWIR_ratio<0.65 & MNDWI < -0.5) |> 
+  mutate(class = "NPV")
+
+soil  <- sample_points_wide |> 
+  filter(NDVI< 0.32 & SWIR_ratio>0.9 & MNDWI < -0.4)|> 
+  mutate(class = "soil")
+
+water <- sample_points_wide |> 
+  filter(NDVI< 0.45 & SWIR_ratio>0.75 & MNDWI > 0.7)|> 
+  mutate(class = "water")
+
+endmembers_loose <- rbind(PV, NPV, soil, water)
+
+endmembers_loose_long <- endmembers_loose |> 
+  pivot_longer(cols = c(9:19, 23,24,25), names_to= "wavelength", values_to = "reflectance")
+```
+
+
+## stricter rules
+
+Following the visual assement of the looser selection, I created a stricter set of rules with few final endmembers. Notable I manually seleced some "real" wetland PV points, are based on the pervious numerically filtering only Forest or arg. plots were selected for PV.
+
+```{r Strict_enemeber_rules, cache=TRUE}
+PV <- sample_points_wide |> 
+  filter(NDVI> 0.965 & SWIR_ratio>0.375 & SWIR_ratio<0.39 &  MNDWI > -0.75 & MNDWI < -0.55 ) |> 
+  mutate(class = "PV")
+
+NPV <- sample_points_wide |> 
+  filter(NDVI> 0.18 & NDVI< 0.21 & SWIR_ratio<0.65 & SWIR_ratio>0.55 & MNDWI < -0.45) |> 
+  mutate(class = "NPV")
+
+soil  <- sample_points_wide |> 
+  filter(NDVI< 0.275 & NDVI> 0.23 & SWIR_ratio>0.975 & MNDWI < -0.6)|> 
+  mutate(class = "soil")
+
+water <- sample_points_wide |> 
+  filter(NDVI< -0.45 &  NDVI> -0.6 & MNDWI > 0.88 & SWIR_ratio<0.75 &  SWIR_ratio>0.5)|> 
+  mutate(class = "water")
+
+
+
+### Create endmember Dfs
+endmembers <- rbind(PV, NPV, soil, water)
+
+endmembers_long <- endmembers |> 
+  pivot_longer(cols = c(9:19, 23,24,25), names_to= "wavelength", values_to = "reflectance")
+
+endmember_endpoints <- endmembers[!duplicated(endmembers$class), ]
+
+```
+
+## TCW endmembers
+```{r TCW_enemeber_rules, cache=TRUE}
+PV <- sample_points_wide |> 
+  filter(NDVI> 0.965   &  SWIR_ratio<0.39 & TCW > -5 & NIR>35) |> 
+  mutate(class = "PV")
+
+NPV <- sample_points_wide |> 
+  filter(NDVI> 0.25 & NDVI< 0.32 & SWIR_ratio<0.6 & SWIR_ratio>0.55 & TCW < -28.5 &  TCW > -35 ) |> 
+  mutate(class = "NPV")
+
+soil  <- sample_points_wide |> 
+  filter(NDVI< 0.3 & NDVI> 0.17 & SWIR_ratio>0.98 & TCW < -26 & TCW > -33 )|> 
+  mutate(class = "soil")
+
+water <- sample_points_wide |> 
+  filter(NDVI< -0.9  &  SWIR_ratio>0.9 & TCW >-1 & TCW <4 & NDWI >0.75 & MNDWI >0.75)|> 
+  mutate(class = "water")
+
+
+### Create endmember Dfs
+endmembers <- rbind(PV, NPV, soil, water)
+
+endmembers_long <- endmembers |> 
+  pivot_longer(cols = c("BLU","GRN","RED","RE1","RE2","RE3","NIR","SW1","SW2","NDVI","SWIR_ratio", "NDWI","MNDWI","TCW"), names_to= "wavelength", values_to = "reflectance")
+
+endmember_endpoints <- endmembers[!duplicated(endmembers$class), ]
+```
+
+## chache endmemerbs from global data set
+```{r cache_endmembers, eval=T, cache=F}
+
+#saveRDS(endmembers, file = "/data/Dagobah/greengrass/schnesha/thesis/feature_space/endmembers.rds")
+endmembers <- readRDS(file = "/data/Dagobah/greengrass/schnesha/thesis/feature_space/endmembers.rds")
+
+endmembers_long <- endmembers |> 
+  pivot_longer(cols = c("BLU","GRN","RED","RE1","RE2","RE3","NIR","SW1","SW2","NDVI","SWIR_ratio", "NDWI","MNDWI","TCW"), names_to= "wavelength", values_to = "reflectance")
+
+endmember_endpoints <- endmembers[!duplicated(endmembers$class), ]
+
+```
+
+
+
+## spectral profiles of endmemebrs
+```{r spectral_profiles_of_endmember_selection, cache=TRUE}
+
+end_members_spec <- endmembers_long |> 
+    mutate(wavelength_num = case_when(wavelength == "BLU" ~ 490,
+                                      wavelength == "GRN" ~ 560,
+                                      wavelength == "RED" ~ 665,
+                                      wavelength == "RE1" ~ 705,
+                                      wavelength == "RE2" ~ 740,
+                                      wavelength == "RE3" ~ 783,
+                                      wavelength == "NIR" ~ 842,
+                                      wavelength == "SW1" ~ 1610,
+                                      wavelength == "SW2" ~ 2190)) |> 
+  na.omit() 
+
+
+ggplot(end_members_spec, aes(wavelength_num, reflectance)) +
+   geom_line(end_members_spec, mapping= aes(wavelength_num, reflectance, group=ID), color="grey", alpha=0.5) +
+  stat_summary(aes(group=class, color=class), fun=mean, geom="line", size = 1.5) + # draw a mean line in the data
+  #geom_line(aes(wavelength_num, reflectance, group = ID), alpha=0.8) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  theme_minimal()
+```
+
+
+## feature space of endmember selection
+```{r feature_space_of_endmember_selection, cache=TRUE}
+ggplot(endmembers, aes(NDVI, SWIR_ratio, fill =class, color=class)) +
+   geom_point() +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  theme_minimal() 
+```
+
+Although on the feature space there is overlapp between NPV and water, in the plot below we can see that they still drastically differ from each other when looking at spectral properties such as MNDWI, and red, RE and SW bands
+
+## Spectral differences between Endmember classes
+```{r Spectral_differences_between_Endmember_classes, cache=TRUE, fig_width=9, fig_height=6 }
+
+endmembers_long |> 
+  mutate(wavelength = factor(wavelength, levels=c("BLU","GRN","RED","RE1","RE2","RE3","NIR","SW1","SW2","NDVI","SWIR_ratio", "NDWI","MNDWI","TCW"))) %>%
+
+ggplot(aes(x=reflectance, fill=class)) + 
+  geom_density() +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  scale_fill_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  theme_minimal() +
+  theme(legend.position="bottom") +
+  facet_wrap(vars(wavelength), scales = "free", shrink=T, ncol = 5)
+
+```
+
+## Date of aquisition between Endmember classes
+```{r date_of_aqusition, cache=TRUE}
+ggplot(endmembers, aes(x=month, fill=class)) + 
+  geom_bar() +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  scale_fill_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  theme_minimal()
+
+ggplot(endmembers, aes(x=month, fill=class)) + 
+  geom_density(alpha=.7) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  scale_fill_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  theme_minimal()
+
+ggplot(endmembers, aes(x=year, fill=class)) + 
+  geom_bar() +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  scale_fill_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  theme_minimal()
+
+ggplot(endmembers, aes(x=month, fill=class)) + 
+  geom_bar() +
+ scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  scale_fill_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  theme_minimal() +
+ facet_wrap(vars(year))
+
+```
+
+## Feauture space plots with endmembers included 
+
+## feature space *Side View* (colored by MNDWI)
+
+```{r feature_space_concept, cache=TRUE}
+
+ggplot(slice_sample(sample_points_wide, n = 250), aes(NDVI, SWIR_ratio, color=MNDWI)) +
+  #geom_point() +
+  #geom_point(data=endmembers[!endmembers$class=="water",], aes(NDVI, SWIR_ratio, shape=class), color ="red") +
+  #geom_point(data=endmembers, aes(NDVI, SWIR_ratio, shape=class), color ="red") +
+#  geom_polygon(data=endmember_endpoints[-c(1),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+#  geom_polygon(data=endmember_endpoints[-c(2),], aes(NDVI, SWIR_ratio), color ="red", fill="grey", alpha=0.6) +
+#  geom_polygon(data=endmember_endpoints[-c(3),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  geom_polygon(data=endmember_endpoints[-c(4),], aes(NDVI, SWIR_ratio), color ="black", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal() 
+
+
+```
+
+
+```{r feature_space_Side_View, cache=TRUE}
+side_view <-  ggplot(slice_sample(sample_points_wide, n = 250000), aes(NDVI, SWIR_ratio, color=MNDWI)) +
+  geom_point() +
+  #geom_point(data=endmembers[!endmembers$class=="water",], aes(NDVI, SWIR_ratio, shape=class), color ="red") +
+  geom_point(data=endmembers, aes(NDVI, SWIR_ratio, shape=class), color ="red") +
+  geom_polygon(data=endmember_endpoints[-c(1),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  geom_polygon(data=endmember_endpoints[-c(2),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  geom_polygon(data=endmember_endpoints[-c(3),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  geom_polygon(data=endmember_endpoints[-c(4),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal() 
+
+  ggMarginal(side_view, type = "densigram", fill="grey")
+```
+
+```{r feature_space_Side_View_density, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio)) +
+  geom_bin_2d(bins = 200) +
+  geom_point(data=endmembers, aes(NDVI, SWIR_ratio, color =class),size=2) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  # geom_polygon(data=endmember_endpoints[-c(1),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(2),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(3),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(4),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal()
+
+```
+
+## MNDWI feature space *top View*
+
+Higher NDVI outlyers at MNDWI edge. Mostly Intensive crop which exhibit no patchiness 
+
+Postive MNDWI points with higher than expected NVDI values. Low water level/water edge points with wetland vegetation cover. Most ( = >80%) come from two locations (Penne Esturary and a small lake)
+
+```{r  MNDWI_feature_space_top_View, cache=TRUE}
+top_view <-  ggplot(slice_sample(sample_points_wide, n = 250000), aes(NDVI, MNDWI, color=SWIR_ratio)) +
+  geom_point() +
+   geom_point(data=endmembers[!endmembers$class=="water",], aes(NDVI, MNDWI, shape=class), color ="red") +
+  #geom_point(data=endmembers, aes(NDVI, SWIR_ratio, shape=class, color =class),size=2) +
+  #   geom_polygon(data=endmember_endpoints[-c(1),], aes(NDVI, MNDWI), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(2),], aes(NDVI, MNDWI), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(3),], aes(NDVI, MNDWI), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(4),], aes(NDVI, MNDWI), color ="red", fill="red", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal()
+
+
+  ggMarginal(top_view, type = "densigram", fill="grey")
+```
+
+```{r MNDWI_feature_space_top_View_density, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, MNDWI)) +
+  geom_bin_2d(bins = 200) +
+ geom_point(data=endmembers, aes(NDVI, MNDWI, color =class), alpha=0.9, size=2) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  # geom_polygon(data=endmember_endpoints[-c(1),], aes(NDVI, MNDWI), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(2),], aes(NDVI, MNDWI), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(3),], aes(NDVI, MNDWI), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(4),], aes(NDVI, MNDWI), color ="red", fill="red", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal()
+
+```
+
+### NDWI version
+```{r NDWI_feature_space_top_View, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, NDWI)) +
+  geom_bin_2d(bins = 200) +
+ geom_point(data=endmembers, aes(NDVI, NDWI, color =class), size=2, alpha=0.9) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) +
+  # geom_polygon(data=endmember_endpoints[-c(1),], aes(NDVI, NDWI), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(2),], aes(NDVI, NDWI), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(3),], aes(NDVI, NDWI), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(4),], aes(NDVI, NDWI), color ="red", fill="red", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal()
+
+```
+
+
+### TCW version
+```{r TCW_feature_space_top_View, cache=TRUE}
+ggplot(sample_points_wide, aes(NDVI, TCW)) +
+  geom_bin_2d(bins = 200) +
+ geom_point(data=endmembers, aes(NDVI, TCW, color =class), size=2, alpha=0.9) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) +
+  # geom_polygon(data=endmember_endpoints[-c(1),], aes(NDVI, TCW), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(2),], aes(NDVI, TCW), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(3),], aes(NDVI, TCW), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(4),], aes(NDVI, TCW), color ="red", fill="red", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal()
+
+```
+
+
+## MNDWI+ SWIR feature space *end View*
+
+```{r SWIR_feature_space_end_View, cache=TRUE}
+end_view <- ggplot(slice_sample(sample_points_wide, n = 250000), aes(MNDWI, SWIR_ratio, color=NDVI)) +
+  geom_point() +
+  geom_point(data=endmembers[!endmembers$class=="water",], aes(MNDWI, SWIR_ratio, shape=class), color ="red") +
+  #geom_point(data=endmembers, aes(NDVI, SWIR_ratio, shape=class, color =class), size=2, alpha=0.9) +
+  geom_polygon(data=endmember_endpoints[-c(1),], aes(MNDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  geom_polygon(data=endmember_endpoints[-c(2),], aes(MNDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  geom_polygon(data=endmember_endpoints[-c(3),], aes(MNDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  geom_polygon(data=endmember_endpoints[-c(4),], aes(MNDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal()
+
+
+  ggMarginal(end_view, type = "densigram", fill="grey")
+
+```
+
+```{r NDWI_SWIR_feature_space_end_View_density, cache=TRUE}
+ggplot(sample_points_wide, aes(MNDWI, SWIR_ratio)) +
+  geom_bin_2d(bins = 200) +
+ geom_point(data=endmembers, aes(MNDWI, SWIR_ratio, color =class), size=2, alpha=0.9) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) +
+  # geom_polygon(data=endmember_endpoints[-c(1),], aes(MNDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(2),], aes(MNDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(3),], aes(MNDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(4),], aes(MNDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal()
+
+```
+
+
+### NDWI version
+```{r NDWI_SWIR_feature_space_end_View, cache=TRUE}
+ggplot(sample_points_wide, aes(NDWI, SWIR_ratio)) +
+  geom_bin_2d(bins = 200) +
+ geom_point(data=endmembers, aes(NDWI, SWIR_ratio, color =class), size=2, alpha=0.9) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) +
+  # geom_polygon(data=endmember_endpoints[-c(1),], aes(NDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(2),], aes(NDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(3),], aes(NDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(4),], aes(NDWI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal()
+
+```
+
+
+### TCW version
+```{r TCW_SWIR_feature_space_end_View, cache=TRUE}
+ggplot(sample_points_wide, aes(TCW, SWIR_ratio)) +
+  geom_bin_2d(bins = 200) +
+ geom_point(data=endmembers, aes(TCW, SWIR_ratio, color =class), size=2, alpha=0.9) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) +
+  # geom_polygon(data=endmember_endpoints[-c(1),], aes(TCW, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(2),], aes(TCW, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(3),], aes(TCW, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  # geom_polygon(data=endmember_endpoints[-c(4),], aes(TCW, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal()
+```
+
+### feature space time series 
+```{r feature_space_across_time, cache=TRUE, fig_width=8, fig_height=5}
+
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio)) +
+   geom_bin_2d(bins = 80) +
+  geom_point(data=subset(endmembers, select = -c(year,month)), aes(NDVI, SWIR_ratio, color =class), size=1.5) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  scale_fill_continuous(type = "viridis", limits=c(2,1500), na.value = "white") +
+  theme_minimal() +
+  theme(legend.position = 'bottom') +
+  facet_wrap(~month)
+
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio)) +
+   geom_bin_2d(bins = 80) +
+  geom_point(data=subset(endmembers, select = -c(year,month)), aes(NDVI, SWIR_ratio, color =class), size=1.5) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  scale_fill_continuous(type = "viridis", limits=c(2,1500), na.value = "white") +
+  theme_minimal() +
+  theme(legend.position = 'bottom') +
+  facet_wrap(~year)
+
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio)) +
+   geom_bin_2d(bins = 80) +
+  geom_point(data=subset(endmembers, select = -c(year,month)), aes(NDVI, SWIR_ratio, color =class), size=1.5) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  scale_fill_continuous(type = "viridis", limits=c(1,1500), na.value = "white") +
+  theme_minimal() +
+  theme(legend.position = 'bottom') +
+  facet_grid(rows= vars(year), cols = vars(month))
+```
+
+
+### feature space across space
+```{r feature_space_across_space, cache=TRUE, fig_width=8, fig_height=5}
+
+ggplot(sample_points_wide, aes(NDVI, SWIR_ratio)) +
+   geom_bin_2d(bins = 80) +
+  geom_point(data=subset(endmembers, select = -c(year,month, Tile_ID)), aes(NDVI, SWIR_ratio, color =class), size=1.5) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  scale_fill_continuous(type = "viridis", limits=c(2,1000), na.value = "white") +
+  theme_minimal() +
+  theme(legend.position = 'bottom') +
+  facet_wrap(~Tile_ID)
+```
+
+## Pixel Density in Feature space
+```{r, cache=TRUE}
+Side_View <- ggplot(slice_sample(sample_points_wide, n = 2500), aes(NDVI, SWIR_ratio, color=MNDWI)) +
+  geom_point() +
+  #geom_point(data=endmembers[!endmembers$class=="water",], aes(NDVI, SWIR_ratio, shape=class), color ="red") +
+  geom_polygon(data=endmember_endpoints[-c(1),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  geom_polygon(data=endmember_endpoints[-c(2),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  geom_polygon(data=endmember_endpoints[-c(3),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  geom_polygon(data=endmember_endpoints[-c(4),], aes(NDVI, SWIR_ratio), color ="red", fill="red", alpha=0.1) +
+  scale_fill_continuous(type = "viridis", limits=c(2,2000), na.value = "white") +
+  theme_minimal()
+
+ggMarginal(Side_View, type = "histogram")
+ggMarginal(Side_View, type = "densigram", fill="grey")
+```
+
+## 3-d feature space with water component and conceptual triangle
+
+```{r, eval=FALSE, cache=FALSE, warning=FALSE}
+library(plotly)
+# sample_points_wide %>%
+# plot_ly(x=~NDVI, y=~MNDWI, z=~SWIR_ratio, type="scatter3d", mode="markers", color=~NDVI) |> 
+#   add_trace(data =endmembers, x=~NDVI, y=~MNDWI, z=~SWIR_ratio, name = 'endmembers', 
+#              type = 'scatter3d', opacity = 1, color="red")
+
+
+sample_points_wide %>%
+  
+  slice_sample(n = 1) |> 
+  
+  plot_ly(
+    x =  ~ NDVI,
+    y =  ~ TCW,
+    z =  ~ SWIR_ratio,
+    type = "scatter3d",
+    mode = "markers",
+    color =  ~ NDVI,
+    opacity = 0.7,
+     size = 0.5,
+    hovertemplate = paste(
+      'NDVI = %{x}',
+      '<br>SWIR_ratio = %{z} <br>',
+      'TCW = %{y}<br>',
+      'UID = %{text}'
+    ),
+    text = ~ UID
+  ) |>
+  add_trace(
+    data = endmembers[!duplicated(endmembers$class), ],
+    #data = sample_points_wide[sample_points_wide$UID %in% c(6074684, 3386315, 4649660, 1147114),],
+    x =  ~ NDVI,
+    y =  ~ TCW,
+    z =  ~ SWIR_ratio,
+    name = 'endmembers',
+    intensity = ~NDVI,
+        colorscale = list(c(0,'grey'),
+                          c(0.45,'grey'),
+                          c(0.5, 'grey'),
+                          c(1, 'grey')), 
+    type = "mesh3d"
+  )
+
+# sample_points_wide %>%
+# plot_ly(x=~NDVI, y=~SWIR_ratio, z=~MNDWI, type="scatter3d", mode="markers", color=~NDVI, opacity=0.7) |> 
+#   add_trace(data =endmembers[!duplicated(endmembers$class),], x=~NDVI, y=~SWIR_ratio, z=~MNDWI, name = 'endmembers', type="mesh3d")
+
+sample_points_wide %>%
+plot_ly(x=~MNDWI, y=~NDVI, z=~SWIR_ratio, type="scatter3d", mode="markers", color=~NDVI, opacity=0.7) |> 
+  add_trace(data =endmembers[!duplicated(endmembers$class),], x=~MNDWI, y=~NDVI, z=~SWIR_ratio, name = 'endmembers', type="mesh3d")
+
+# sample_points_wide %>%
+# plot_ly(x=~MNDWI, y=~SWIR_ratio, z=~NDVI, type="scatter3d", mode="markers", color=~NDVI, opacity=0.7) |> 
+#   add_trace(data =endmembers[!duplicated(endmembers$class),], x=~MNDWI, y=~SWIR_ratio, z=~NDVI, name = 'endmembers', type="mesh3d")
+
+sample_points_wide %>%
+plot_ly(x=~SWIR_ratio, y=~MNDWI, z=~NDVI, type="scatter3d", mode="markers", color=~NDVI, opacity=0.7) |> 
+  add_trace(data =endmembers[!duplicated(endmembers$class),], x=~SWIR_ratio, y=~MNDWI, z=~NDVI, name = 'endmembers', type="mesh3d")
+
+# sample_points_wide %>%
+# plot_ly(x=~SWIR_ratio, y=~NDVI, z=~MNDWI, type="scatter3d", mode="markers", color=~NDVI, opacity=0.7) |> 
+#   add_trace(data =endmembers[!duplicated(endmembers$class),],x=~SWIR_ratio, y=~NDVI, z=~MNDWI, name = 'endmembers', type="mesh3d")
+```
+
+
+### Save as vector layer
+```{r, cache=TRUE, eval=FALSE}
+
+
+xy <- endmembers |> select(x,y) 
+library(sp)
+
+endmembers_vect <- SpatialPointsDataFrame(coords = xy, 
+                                          data = subset( endmembers),
+                                          proj4string = CRS("+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs"))  |> 
+  vect()
+  #project( "epsg:3857")
+#project( "epsg:4326")
+  
+plot(endmembers_vect, "class", col =c("peru", "olivedrab", "darkred", "steelblue"))
+
+writeVector(endmembers_vect, 
+            "/data/Dagobah/greengrass/schnesha/thesis/feature_space/test_endmembers.gpkg",
+            filetype="GPKG",
+            options = NULL,
+            overwrite=TRUE)
+
+
+
+
+```
+
+
+### Save endmembers as text file
+
+```{r, cache=TRUE, eval=FALSE}
+endmembers_txt <- endmembers |>  
+  #mutate(class = as.numeric(as.factor(class))) |> 
+  #filter(Tile_ID %in% c("X0070_Y0038","X0070_Y0039")) |> 
+  select(x, y, class) 
+
+endmembers_txt |> group_by(class) |> tally()
+
+
+endmembers_txt <-   SpatialPointsDataFrame(coords = select(endmembers_txt, x, y)  , 
+                         data = subset(endmembers_txt),
+                         proj4string = CRS("+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs")) |> 
+    vect() |> 
+  as.data.frame() 
+  
+write.table(endmembers_txt, "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/02_samples/endmembers.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+write.table(endmembers_txt, "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts_indicies/02_samples/endmembers.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+```
+
+# Force fractional cover helper functinos 
+
+### Force sample .txt file reconstruction
+
+### Save coordinates as text file
+
+```{r, cache=TRUE, eval=FALSE}
+coordinates_txt <- endmembers |>  
+  #mutate(class = as.numeric(as.factor(class))) |> 
+  #filter(Tile_ID %in% c("X0070_Y0038","X0070_Y0039")) |> 
+  select(x, y) |> 
+  mutate(x = round(x, 6),
+         y = round(y, 6))
+
+write.table(coordinates_txt, "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/02_samples/coordinates.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+write.table(coordinates_txt, "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts_indicies/02_samples/coordinates.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+```
+
+### Save features as text file
+
+```{r, cache=TRUE, eval=FALSE}
+features_txt <- endmembers |>  
+  #mutate(class = as.numeric(as.factor(class))) |> 
+ # filter(Tile_ID %in% c("X0070_Y0038","X0070_Y0039")) |> 
+  select(BLU, GRN, RED, NIR,
+         RE1, RE2, RE3, SW1, SW2,
+         #NDVI
+         ) |> 
+  mutate(#NDVI = NDVI*100,
+         across(everything(), ~ .x *100))
+
+
+write.table(features_txt, "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/02_samples/features.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+########################
+### with all indicies###
+########################
+
+features_txt <- endmembers |>  
+  #mutate(class = as.numeric(as.factor(class))) |> 
+ # filter(Tile_ID %in% c("X0070_Y0038","X0070_Y0039")) |> 
+  select(BLU, GRN, RED, NIR,
+         RE1, RE2, RE3, SW1, SW2,
+         NDVI, MNDWI, NDWI, TCW      
+         ) |> 
+  mutate(across(NDVI:NDWI, ~ .x *100),  #apply an extra 10 to get to 1000
+         across(everything(), ~ .x *100),
+         across(everything(), ~ as.integer(.x)))
+
+write.table(features_txt, "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts_indicies/02_samples/features.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+```
+
+### Save response as text file
+
+```{r, cache=TRUE, eval=FALSE}
+response_txt <- endmembers |>  
+  mutate(class = as.numeric(as.factor(class))) |> 
+  #filter(Tile_ID %in% c("X0070_Y0038","X0070_Y0039")) |> 
+  select(class) 
+
+write.table(response_txt, "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/02_samples/response.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+write.table(response_txt, "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts_indicies/02_samples/response.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+```
+
+### Get list of all dates in time series 
+
+Used for magic parameters
+
+```{r, eval=FALSE}
+### Get list of all dates in time series 
+
+tile_folders <- list.dirs("/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/01_TS_S2_17-22", full.names = T) 
+tile_folders <-  tile_folders[grepl("X", tile_folders)]
+dates <- c()
+for (i in 1:length(tile_folders)) {
+  
+  tile_dates <-  list.files(tile_folders[i], full.names = T) |> 
+    str_sub(-18,-5)
+  
+  dates <- dates |> 
+    append(tile_dates[grepl("SEN2", tile_dates)]) 
+  
+  # remove potentially corrupted dates
+  dates <- dates[!grepl("tif", dates)]
+}
+dates <- unique(dates)
+
+
+write(dates, 
+      "/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/prm_files/observation_dates_magic_prm.txt",
+      sep = " ",
+      ncolumns=length(dates)
+      )
+```
+
+### ML execute
+```{r, eval=FALSE}
+# starting force from a dokcer image str
+dforce = 'docker run  -e FORCE_CREDENTIALS=/app/credentials -e BOTO_CONFIG=/app/credentials/.boto -v $HOME:/app/credentials  -v /data:/data -v /mnt:/mnt  -v $HOME:/home/schnesha -w $PWD -u $(id -u):$(id -g) -t --rm davidfrantz/force:latest'
+
+ml_models <- list.files("/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/prm_files/05_ml_predict_prm", full.names = T)
+
+tile_folders <- list.dirs("/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/05_predictions", full.names = T) 
+tile_folders <-  tile_folders[grepl("X", tile_folders)]
+
+# LINUX command
+#for file in /data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/prm_files/05_ml_predict_prm/*; do dforce force-higher-level "$file"; done
+
+setwd("/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/prm_files")
+if (length(dates) == length(ml_models)) {
+  for (i in 1:length(ml_models)) {
+    cmd <- paste(dforce, "force-higher-level", ml_models[i])
+    system(cmd, wait = TRUE)
+    
+    #Sys.sleep(2)
+    
+    # for (j in 1:length(tile_folders)) {
+    #  if (length(list.files(tile_folders[j], pattern = 'HL', full.names = T))==0) next
+    #     
+    #     list.files(tile_folders[j],
+    #                pattern = 'HL',
+    #                full.names = T)
+    #     
+    #     unmaned_files <-
+    #       list.files(tile_folders[j],
+    #                  pattern = 'HL',
+    #                  full.names = T)
+    #     
+    #     file.rename(unmaned_files,
+    #                 str_replace(
+    #                   unmaned_files,
+    #                   pattern = paste0('HL_ML_', c("MLI", "MLP", "MLU"), ".tif"),
+    #                   paste0("ML_", c("MLI", "MLP", "MLU"), "_", dates[i], ".tif")
+    #                 ))
+    # }
+    #print(paste(dates[i], "is done"))
+  }
+}
+```
+
+## Extract Information per tile 
+#### create sampling grid
+```{r, cache=F, eval=F}
+# import updatede wetland mask
+wetland_mask <- rast("/data/Dagobah/greengrass/schnesha/thesis/wetland_masks/wetland_mask_v2.tif") #|>  crop(ext(4546026, 4676026, 3334920, 3524920))
+
+# There are no methods for negative buffering of rasters in R. This is a workaround that inverts the wetland mask and using an ifelse inverts na values and buffers into the valid raster pixels
+wetland_mask <- !buffer(ifel(is.na(wetland_mask), 1, NA), 
+              width=50) 
+
+# Replace false values with NA so that they can me omitted in the sampling process
+wetland_mask <- subst(wetland_mask, FALSE, NA)
+
+# Sample points on a 200x200 m regular grid
+samples <- spatSample(wetland_mask,
+                      size   = size(wetland_mask)/500, # get total size and divide to reduce 
+                      method = "regular",
+                      as.points =T,
+                      exhaustive=T, na.rm=TRUE) 
+
+plot(samples)
+
+grid <- read_sf("/data/Dagobah/dc/deu/vector/datacube-grid_DEU_10km.gpkg") |> 
+   st_transform(crs = st_crs(samples)) |> 
+  vect()
+
+plot(grid)
+
+regular <- terra::intersect(grid, samples) |> 
+   select(-Tile_X, -Tile_Y, -wetland_mask) |> 
+  mutate(ID = row_number())
+
+
+
+plot(regular)
+
+```
+
+### extract data on a per tile basis
+```{r, cache=F, eval=F}
+# create list of all tile folders 
+tile_folders <- list.dirs("/data/Dagobah/greengrass/schnesha/thesis/04_fraction_mapping_ts/05_predictions", full.names = T) 
+tile_folders <-  tile_folders[grepl("X", tile_folders)]
+
+FC_df_wide <- c()
+
+for (i in 1:length(tile_folders)) {
+   
+   # list bands in tile (with full path) and stack
+   band_files <- list.files(tile_folders[i], full.names = T)
+   band_files <- band_files[!grepl("aux.xml", band_files)]
+   
+   
+   # read in all band for the tile as a raster stack
+   FC_stack <- rast(band_files)
+   
+   # get the number of layers (per band)
+   nlayers = nlyr(FC_stack)/4
+   # add unique name to each band 
+   names(FC_stack) <-  paste0( rep(str_sub(band_files, 103, 110),each=4), "_", c("NPV", "PV", "soil", "water"))
+  
+   # current tile
+   current_tile <- band_files[1] |> str_sub(80,90)
+   
+   # subset sample points to current tile
+  filtered_samples <- regular |> 
+     filter(Tile_ID == current_tile) 
+    
+   
+  # extract S2 for sample points and convert to df
+  sample_points <- terra::extract(FC_stack, filtered_samples, xy=T, bind=T, ID=T) |> 
+     as.data.frame()
+  # bind to total df
+  FC_df_wide <- plyr::rbind.fill(FC_df_wide, as.data.frame(sample_points))
+  
+  # Progress notifier
+  print(paste("tile", current_tile, "done", "(", i, "out of ", length(tile_folders), ")"))
+  
+}
+```
+
+## cache output of S2 extraction for sample points 
+```{r , cache=F, eval=T}
+# Full data set
+#saveRDS(FC_df_wide, "/data/Dagobah/greengrass/schnesha/thesis/feature_space/FC_df_wide.rds")
+FC_df_wide <- readRDS( file = "/data/Dagobah/greengrass/schnesha/thesis/feature_space/FC_df_wide.rds") 
+
+```
+
+## export as vect
+```{r, cache=T, eval=F}
+FC_ts_point <- FC_df_wide |> 
+  select(x, y, Tile_ID, ID)
+
+
+xy <- FC_ts_point |> select(x,y) 
+library(sp)
+
+FC_ts_point <- SpatialPointsDataFrame(coords = xy, 
+                                          data = subset( FC_ts_point),
+                                          proj4string = CRS("+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs"))  |> 
+  vect()
+
+plot(FC_ts_point)  
+
+
+writeVector(FC_ts_point, 
+            "/data/Dagobah/greengrass/schnesha/thesis/feature_space/FC_ts_points.gpkg",
+            filetype="GPKG",
+            options = NULL,
+            overwrite=TRUE)
+
+```
+
+```{r, cache=F, eval=T}
+FC_df <- FC_df_wide  %>%
+  pivot_longer(-c(x, y, Tile_ID, ID), names_to="date") %>%
+  na.omit() %>%
+ # filter(ID %in% c(4201, 3194, 11812, 27169)) |> 
+  mutate(class = str_sub(date, 10,-1),
+         date = as.Date(str_sub(date, 1,8), "%Y%m%d"),
+         month       = lubridate::month(date),
+         year        = lubridate::year(date), 
+         month_year  = paste0(month,"_",year)) |> 
+  rename(fractional_cover = value) #|> slice_sample(n=10000000) 
+  
+```
+
+
+
+## df data vis
+
+## boxplots
+
+### by year
+```{r, cache=T, eval=T}
+ggplot(FC_df, aes(as.factor(year), fractional_cover, group=year, fill=year)) +
+  geom_boxplot() +
+  scale_fill_continuous(type = "viridis") +
+  theme_minimal() 
+```
+
+### by year month
+```{r, cache=T, eval=T}
+ggplot(FC_df, aes(month, fractional_cover, group=month, fill=month)) +
+  geom_boxplot(notch=T) +
+  scale_fill_continuous(type = "viridis") +
+  theme_minimal() +
+  facet_wrap(~year)
+
+ggplot(FC_df, aes(month, fractional_cover, group=month, fill=month)) +
+  geom_violin() +
+  scale_fill_continuous(type = "viridis") +
+  theme_minimal() +
+  facet_wrap(~year)
+```
+
+## time series
+```{r Ime_series_plots, cache=T, eval=T}
+
+ggplot(FC_df, aes(date, fractional_cover/100)) +
+   #stat_summary(FC_df, mapping= aes(date, fractional_cover/100, group = interaction(class, Tile_ID)),  fun=mean, geom="line", color="grey", alpha=0.5) +
+  stat_summary(aes(group=class, color=class), fun=mean, geom="line", linewidth = 1.5) + # draw a mean line in the data
+  stat_summary(aes(group=class, color=class), fun=mean, geom="point", linewidth = 1.5) +
+  #geom_line(FC_df, mapping= aes(date, fractional_cover/100, group = Tile_ID), alpha=0.8) +
+scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) +   theme_minimal() +
+  ylab("Fractional cover (%)") + 
+  facet_wrap(~year, scales="free_x")
+
+
+FC_df  |> filter(Tile_ID %in% c("X0068_Y0038","X0068_Y0042", "X0068_Y0039", "X0070_Y0038",  "X0071_Y0039",  "X0071_Y0045"   )) %>%
+ggplot( aes(date, fractional_cover/100)) +
+   stat_summary(mapping= aes(date, fractional_cover/100, group = interaction(class, Tile_ID)),  fun=mean, geom="line", color="grey", alpha=0.5) +
+  stat_summary(aes(group=class, color=class), fun=mean, geom="line", linewidth = 1.5) + # draw a mean line in the data
+    stat_summary(aes(group=class, color=class), fun=mean, geom="point", linewidth = 1.5) +
+  #geom_line(FC_df, mapping= aes(date, fractional_cover/100, group = Tile_ID), alpha=0.8) +
+scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) +   theme_minimal() +
+  ylab("Fractional cover (%)") + 
+  facet_grid(cols=vars(year), rows = vars(Tile_ID), scales="free_x")
+
+
+ggplot(FC_df, aes(date, fractional_cover/100, color = class)) +
+   geom_smooth() +
+scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  theme_minimal() +
+  ylab("Fractional cover (%)") + 
+  facet_wrap(~year, scales="free_x")
+
+
+```
+
+
+### single tile timeseries
+```{r, cache=T, eval=T}
+
+FC_df |> 
+  filter(Tile_ID %in% c("X0070_Y0038")) %>%
+
+ggplot(aes(date, fractional_cover/100, color=class)) +
+ # geom_point() +
+  geom_smooth() +
+ # geom_line(mapping= aes(date, fractional_cover/100, group = interaction(class, ID)), alpha=0.8) +
+  scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  theme_minimal() +
+  ylab("Fractional cover (%)") + 
+  facet_wrap(~year, scales="free")
+
+```
+
+### single time series
+```{r Time_series_single_locations, cache=T, eval=T}
+
+FC_df |> 
+  filter(year>2017) %>%
+
+ggplot(aes(date, fractional_cover/100, color=class)) +
+  stat_smooth (geom="line", alpha=0.3, size=3,span = 0.95 ) +
+  geom_point() +
+  geom_line(mapping= aes(date, fractional_cover/100, group = interaction(class, ID)), alpha=0.8) +
+
+scale_color_manual(values=c("peru", "olivedrab", "darkred", "steelblue")) + 
+  theme_minimal() +
+  #theme(strip.text.y = element_blank()) +
+  ylab("Fractional cover (%)") + 
+   facet_grid(cols=vars(year), rows = vars(ID), scales="free_x", switch="x")
+
+```
+
+## statistical evauluation of drought 
+```{r, cache=F, eval=F}
+
+drought_index_df <- drought_index_df |> 
+  mutate(month = as.numeric(month),
+         year = as.numeric(year)) |>
+  rename(drought_index=value) |> 
+  select(-date)
+
+FC_drought <- FC_df |> 
+   filter(class=="PV") |> 
+  group_by(month_year, ID) |> 
+  mutate(fractional_cover= mean(fractional_cover)) |> 
+  left_join(drought_index_df, by = c("month", "year")) |> 
+  ungroup()
+ 
+
+library(lme4)
+
+# prep data frame
+
+# merge
+
+# model 
+
+ggplot(slice_sample(FC_drought, n=100000), aes(drought_index, fractional_cover)) +
+  #geom_point()+
+  geom_smooth() #+facet_wrap(~month)
+
+m_PV_drougt = lmer(fractional_cover ~ drought_index  + (1|Tile_ID) + (1|month_year), #+ (1|x) + (1|y)
+               data = slice_sample(FC_drought, n=10000)) 
+
+summary(m_PV_drougt)
+
+plot(m_PV_drougt)
+
+qqnorm(resid(m_PV_drougt))
+qqline(resid(m_PV_drougt))
+
+ggstatsplot::plot_model(m_PV_drougt, type = "re", show.values = TRUE, vline.color = "black")
+
+ggstatsplot::ggcoefstats(x = m_PV_drougt, conf.int = TRUE,
+  conf.level = 0.95, conf.method = "HPDinterval", exclude.intercept = T, stats.labels =F) 
+
+```
+
+
+## Plot ML prediciton output
+```{r, eval=FALSE}
+
+predictions  <- list.files(tile_folders,
+                   pattern = 'MLP',
+                   full.names = T)
+
+predictions <- predictions[!grepl("aux.xml", predictions)]
+
+predictions <- rast(predictions)
+
+# add date to name of layer
+names(predictions) <- paste0(names(predictions), "_", str_sub(sources(predictions), 103, 110) )
+
+# subsample to reduce size
+#predictions <- spatSample(predictions, 1000000, method="random", as.raster=T)
+
+# extract each layer and rename with class type
+PV = predictions[[grepl("CLASS_001", names(predictions))]]
+names(PV) = paste0(str_extract(names(PV),"(?<=_)[^_]+$"), "_PV")
+
+NPV = predictions[[grepl("CLASS_002", names(predictions))]]
+names(NPV) = paste0(str_extract(names(NPV),"(?<=_)[^_]+$"), "_NPV")
+
+soil = predictions[[grepl("CLASS_003", names(predictions))]]
+names(soil) = paste0(str_extract(names(soil),"(?<=_)[^_]+$"), "_soil")
+
+water = predictions[[grepl("CLASS_004", names(predictions))]]
+names(water) = paste0(str_extract(names(water),"(?<=_)[^_]+$"), "_water")
+
+# restock corretly names layers
+FC_stack <- c(PV, NPV, soil, water)
+
+plot(FC_stack)
+```
+
+
+### old df building method. to RAM intensive
+```{r, eval=FALSE}
+# FC_df <- as.data.frame(FC_stack) %>%
+#   pivot_longer(everything(), names_to="date") %>%
+#   na.omit() %>%
+#   slice_sample(n=100000) %>%
+#   mutate(class = str_sub(date, 10,-1),
+#          date = as.Date(str_sub(date, 1,8), "%Y%m%d"),
+#          month       = lubridate::month(date),
+#          year        = lubridate::year(date), 
+#          month_year  = paste0(month,"_",year))
+```
+
+
+
+
+# K-means clustering of enmember
+
+In oder to to attempt to better understand the inter class differences in PV and water I attempted to you a k-means algorithm subdived groups and potentially aid in visual identification of trends in QGIS. 
+
+The outcome of this visual interpretation is that PV seems to subdevided into three chunks, correspoming with high NDVI (mostly dense forest & some crops), mid NDVI (less dense forest & crops), low NDVI (pixels with light tree cover & some less intensive crops & "real" wetland PV)
+
+When subdeviding the water feature space using the ploly data plotting tool it was not possible to find specific trends in the feature space. Furthemore the Kmeans clustering did not differentiate water into clear subgroups and catagories points into 2 classes, differentiated by being slightly more/less bright. In QGIS there were no differences in distribution of location of these classes. 
+
+```{r}
+library(factoextra)
+library(cluster)
+```
+
+
+```{r, eval=FALSE, cache=TRUE}
+kmeans_data <- na.omit(endmembers_loose) %>%
+   select(-x,-y) |> 
+  select(c(9:19,21, 22,23)) |> 
+  scale() |> 
+  as.data.frame() #|>  slice_sample(n=50000)
+
+```
+
+## Perform K-Means Clustering of end memebers
+```{r, eval=FALSE,cache=TRUE}
+#perform k-means clustering with k = 6 clusters
+km <- kmeans(kmeans_data, centers = 6, nstart = 25)
+
+#plot results of final k-means model
+fviz_cluster(km, data = kmeans_data)
+```
+
+### join data
+```{r,eval=FALSE, cache=TRUE}
+foo <- endmembers_loose# |> distinct(ID, .keep_all = T)
+#add cluster assigment to original data
+final_data <- cbind(foo, cluster = km$cluster) |> 
+  mutate(cluster = as.factor(cluster))
+```
+
+## Histogram of distribution of unsupervised classes
+```{r,eval=FALSE, cache=TRUE}
+
+ggplot(final_data, aes(cluster, fill=cluster)) +
+   scale_color_brewer(palette = "Dark2") +
+  geom_bar()
+
+```
+
+## Feature space with unsupervised classes
+```{r, eval=FALSE,cache=TRUE}
+ggplot(final_data, aes(NDVI, SWIR_ratio, color=cluster)) +
+  geom_point(alpha=0.8) +
+  #geom_point(data=reference_spectra, aes(NDVI, SWIR_ratio), color ="red") +
+   scale_color_brewer(palette = "Dark2") +
+  theme_minimal() +  
+ # scale_x_continuous(expand = c(0, 0), limits = c(-0.2, 1)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.2))
+```
+
+
+```{r, eval=FALSE,cache=TRUE}
+cluster_long <- final_data |> 
+  pivot_longer(cols = c(9:19,21, 22,23), names_to= "wavelength", values_to = "reflectance") |> 
+  mutate(cluster = as.character(cluster))
+
+cluster_long$cluster[cluster_long$cluster==1] = "PV_low_NDVI" 
+cluster_long$cluster[cluster_long$cluster==2] = "PV_soil/NPV" 
+cluster_long$cluster[cluster_long$cluster==3] = "PV_high_SWIR"
+cluster_long$cluster[cluster_long$cluster==4] = "PV_mid_NDVI" 
+cluster_long$cluster[cluster_long$cluster==5] = "water" 
+cluster_long$cluster[cluster_long$cluster==6] = "PV_high_NDVI" 
+
+
+ggplot(cluster_long, aes(x=reflectance, fill=cluster)) + 
+  geom_density(alpha=0.9) +
+  #scale_color_discrete(type = "viridis") +
+  #scale_fill_discrete(type = "viridis") +
+     scale_fill_brewer(palette = "Dark2") +
+  theme_minimal() +
+  facet_wrap(vars(wavelength), scales = "free")
+```
+
+## Plotly map of classes
+```{r, eval=FALSE,cache=FALSE, eval=FALSE}
+ xy <- cluster_long |> select(x,y) 
+library(sp)
+library(leaflet)
+
+clustered_vect <- SpatialPointsDataFrame(coords = xy,
+                                         data = cluster_long,
+                                         proj4string = CRS("+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs")) |> 
+  terra::vect() |> 
+  #project( "epsg:3857")
+terra::project("epsg:4326")
+
+
+writeVector(clustered_vect, 
+            "/data/Dagobah/greengrass/schnesha/thesis/feature_space/test_endmembers_kmeans.gpkg",
+            filetype="GPKG",
+            options = NULL,
+            overwrite=TRUE)
+
+
+cluster_color <- colorFactor(palette = 'Dark2', clustered_vect$cluster)
+clustered_vect |> 
+  filter(cluster %in% c("PV_high_NDVI", "PV_mid_NDVI", "PV_low_NDVI")) |> 
+leaflet() %>% 
+  addCircleMarkers(popup = ~as.character(id), radius= 6, label = ~as.character(id), stroke = FALSE, color= ~cluster_color(cluster),
+                   fillOpacity = 1) |> addTiles() 
+
+```
+
+
+## K-means clustering
+
+```{r}
+library(factoextra)
+library(cluster)
+```
+
+
+```{r,eval=FALSE,cache=TRUE}
+kmeans_data <- na.omit(sample_points_wide) %>%
+   select(-x,-y) |> 
+  select(c(9:23)) |> 
+  scale() |> 
+  as.data.frame() #|>  slice_sample(n=50000)
+
+```
+
+# Perform K-Means Clustering 
+```{r, eval=FALSE,cache=TRUE}
+#perform k-means clustering with k = 6 clusters
+km <- kmeans(kmeans_data, centers = 4, nstart = 25)
+
+#plot results of final k-means model
+fviz_cluster(km, data = kmeans_data)
+```
+
+### join data
+```{r, eval=FALSE,eval=F, cache=TRUE}
+foo <- sample_points_wide# |> distinct(ID, .keep_all = T)
+#add cluster assigment to original data
+final_data <- cbind(foo, cluster = km$cluster) |> 
+  mutate(cluster = as.factor(cluster))
+```
+
+## Histogram of distribution of unsupervised classes
+```{r,eval=FALSE, eval=F, cache=TRUE}
+
+ggplot(final_data, aes(cluster, fill=cluster)) +
+   scale_color_brewer(palette = "Dark2") +
+  geom_bar()
+
+```
+
+## Feature space with unsupervised classes
+```{r, eval=F,cache=TRUE}
+ggplot(final_data, aes(NDVI, SWIR_ratio, color=cluster)) +
+  geom_point(alpha=0.8) +
+  #geom_point(data=reference_spectra, aes(NDVI, SWIR_ratio), color ="red") +
+    scale_color_brewer(palette = "Dark2") +
+  theme_minimal() +
+ # scale_x_continuous(expand = c(0, 0), limits = c(-0.2, 1)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.2))
+```
+
+## Plotly map of classes
+```{r,eval=FALSE, cache=FALSE}
+ xy <- final_data |> select(x,y) 
+library(sp)
+library(leaflet)
+
+clustered_vect <- SpatialPointsDataFrame(coords = xy, data = final_data,
+                               proj4string = CRS("+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs")) |> 
+  vect() |> 
+  #project( "epsg:3857")
+project( "epsg:4326")
+
+cluster_color <- colorFactor(palette = 'Dark2', clustered_vect$cluster)
+
+
+leaflet(data = clustered_vect) %>% 
+  addCircleMarkers(popup = ~as.character(id), radius= 6, label = ~as.character(id), stroke = FALSE, color= ~cluster_color(cluster),
+                   fillOpacity = 1) |> addTiles() 
+
+```
+
+
+
+
+
+# only NDVI+SWIR+MNDWI kmeans
+```{r, eval=F,cache=TRUE}
+
+#calculate gap statistic based on number of clusters
+km <- kmeans_data |> 
+  select(NDVI, SWIR_ratio, MNDWI) |> 
+  #perform k-means clustering with k = 6 clusters
+ kmeans(centers = 4, nstart = 25)
+
+#plot results of final k-means model
+fviz_cluster(km, data = kmeans_data)
+
+foo <- sample_points_wide 
+#add cluster assigment to original data
+final_data <- cbind(foo, cluster = km$cluster) |> 
+  mutate(cluster = as.factor(cluster))
+
+```
+
+```{r, eval=F,cache=TRUE}
+
+ggplot(final_data, aes(cluster, fill=cluster)) +
+   scale_color_brewer(palette = "Dark2") +
+  geom_bar()
+
+```
+
+
+```{r, eval=F,cache=TRUE}
+ggplot(final_data, aes(NDVI, SWIR_ratio, color=cluster)) +
+  geom_point(alpha=0.8) +
+  #geom_point(data=reference_spectra, aes(NDVI, SWIR_ratio), color ="red") +
+    scale_color_brewer(palette = "Dark2") +
+  theme_minimal() +
+ # scale_x_continuous(expand = c(0, 0), limits = c(-0.2, 1)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.2))
+```
